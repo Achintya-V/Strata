@@ -1,0 +1,2 @@
+[console_scripts]
+strata = strata.cli:app

@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+benchmarks/results/
+benchmarks/datasets/
+chat-memory/
+.streamlit/

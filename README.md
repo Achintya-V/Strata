@@ -131,4 +131,29 @@ strata/
 └── templates/           # schema.md, config.yaml
 ```
 
-Run the demo: `python examples/simple_chatbot.py`. Run the tests: `pytest`.
+## Try it
+
+```bash
+pip install -r requirements.txt && pip install -e .
+
+streamlit run chatbot/app.py            # chat UI (Nemotron via NVIDIA_API_KEY in .env;
+                                        # runs in labelled demo mode without a key)
+python examples/simple_chatbot.py       # minimal integration loop, fully offline
+pytest -q                               # 133 tests
+```
+
+## Benchmarks
+
+```bash
+python benchmarks/bench.py 1000                          # latency @1K pages
+python -m benchmarks.memory_evals.run --self-test        # LoCoMo/LongMemEval/in-house on fixtures
+python -m benchmarks.memory_evals.run --download-locomo --limit 2 --with-llm
+python -m benchmarks.memory_evals.run --inhouse-repo ./chat-memory
+```
+
+The memory-eval runner prints per-benchmark and combined labelled tables and
+saves JSON to `benchmarks/results/`. Retrieval-only numbers are answer-presence
+recall proxies — not leaderboard-comparable (it says so in its own output).
+
+Full architecture, implementation-status matrix, and the placeholder/mock
+audit: [PROJECT-STATE.md](PROJECT-STATE.md).

@@ -193,7 +193,7 @@ class Memory:
             "metadata": {"type": page.type, "status": page.status.value,
                          "tags": page.tags, "confidence": page.confidence,
                          "pinned": page.pinned, **page.metadata},
-            "claims": [c.model_dump(exclude_none=True) for c in page.claims],
+            "claims": [c.model_dump(mode="json", exclude_none=True) for c in page.claims],
             "body": body,
         }
 

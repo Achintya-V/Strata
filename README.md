@@ -1,10 +1,10 @@
 # Strata
 
 **Git-native memory layer for any chatbot.** Mem0's integration shape —
-`pip install`, `Memory().add()`, `Memory().search()` — with a different storage
-bet: your memory is a folder of markdown files in a git repo, not rows in a
-vector database. `cat` it, `grep` it, `git diff` it, keep it forever, with or
-without Strata running. The files ARE the memory.
+`pip install strata-memory`, `Memory().add()`, `Memory().search()` — with a
+fundamentally different storage bet: your memory lives in a folder of plain
+markdown files in a git repo, not locked in a vector database.
+`cat` it, `grep` it, `git diff` it, keep it forever. **The files ARE the memory.**
 
 ```python
 from strata import Memory
@@ -14,8 +14,33 @@ m.add("I'm vegetarian and prefer window seats", user_id="alice")
 m.search("alice seating", user_id="alice", format="context")
 ```
 
-Built against [strata-deep-research-and-architecture.md](strata-deep-research-and-architecture.md)
-(Research Report v1.0) — the revised architecture over the original spec v2.0.
+## Install
+
+```bash
+# Core — zero external deps, offline heuristic extractor, BM25 search
+pip install strata-memory
+
+# Recommended — adds semantic vector search (L2)
+pip install strata-memory[vector]
+
+# Full stack — vector + LLM extraction + PII + MCP + REST API + crypto-shred
+pip install strata-memory[all]
+```
+
+Optional extras:
+
+| Extra | Adds | Use when |
+|-------|------|----------|
+| `[vector]` | sqlite-vec + model2vec | Better retrieval, semantic search |
+| `[llm]` | anthropic | LLM extraction (set `ANTHROPIC_API_KEY`) |
+| `[pii]` | presidio-analyzer | Production PII detection (30+ types) |
+| `[mcp]` | mcp | Claude Code/Desktop MCP server |
+| `[api]` | fastapi + uvicorn | REST API server |
+| `[crypto]` | cryptography | AES-256-GCM crypto-shred erasure |
+| `[all]` | everything above | Full production stack |
+
+Everything degrades gracefully: no API key → offline heuristic extractor;
+no vector extra → lexical BM25 only. Core never imports torch.
 
 ## What makes it different
 

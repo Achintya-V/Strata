@@ -63,7 +63,12 @@ class WritePipeline:
         self.extractor, self.ledgers = extractor, ledgers
         self.on_pages_written = on_pages_written or (lambda ids: None)
         self.index_summary = index_summary_provider or repo.index_summary
-        self.review_queue = ReviewQueue(repo.strata_dir, ledgers)
+        # Choose review queue backend: v1 JSON files or v2 git branches
+        if config.pipeline.review_backend == "git":
+            from .staging_review import StagingReviewQueue
+            self.review_queue = StagingReviewQueue(repo, git, ledgers, schema)
+        else:
+            self.review_queue = ReviewQueue(repo.strata_dir, ledgers)
         self.db_path = repo.strata_dir / "queue.db"
         self._pool = ConnectionPool(self.db_path)
         self._stop = threading.Event()
@@ -151,6 +156,12 @@ class WritePipeline:
         written: list[str] = []
         reviewed = failed = 0
         index_summary = self.index_summary()
+
+        # Batch extraction path (§9.8): pack multiple raw entries into one LLM call
+        batch_size = self.config.pipeline.batch_extract_size
+        if batch_size > 1 and hasattr(self.extractor, "extract_batch"):
+            return self._process_rows_batched(rows, index_summary)
+
         for row_id, raw_path in rows:
             raw = self.repo.read_raw(raw_path)
             if raw is None:
@@ -190,6 +201,65 @@ class WritePipeline:
             )
         elif reviewed:
             log.info("%d op(s) queued for review, nothing written", reviewed)
+        return len(rows)
+
+    def _process_rows_batched(self, rows: list[tuple[int, str]], index_summary: str) -> int:
+        """Batch extraction: one LLM call for all rows in this cycle (§9.8)."""
+        written: list[str] = []
+        reviewed = failed = 0
+
+        # Load raw entries, track which failed to load
+        valid: list[tuple[int, str, object]] = []
+        for row_id, raw_path in rows:
+            raw = self.repo.read_raw(raw_path)
+            if raw is None:
+                self._mark(row_id, "failed", f"raw entry missing: {raw_path}")
+                failed += 1
+            else:
+                valid.append((row_id, raw_path, raw))
+
+        if not valid:
+            return len(rows)
+
+        entries = [r for _, _, r in valid]
+        all_ops = self.extractor.extract_batch(entries, index_summary, self.schema)
+
+        for (row_id, raw_path, raw), ops in zip(valid, all_ops):
+            if not ops:
+                # Batch produced nothing for this entry — fall back to single call
+                try:
+                    ops = self.extractor.extract(raw, index_summary, self.schema)
+                except Exception as e:
+                    self.repo.write_failed(
+                        json.dumps({"raw_path": raw_path, "error": str(e),
+                                    "extractor": self.extractor.name,
+                                    "failed_at": utcnow_iso()}, indent=2),
+                        reason=type(e).__name__,
+                    )
+                    self._mark(row_id, "failed", str(e))
+                    failed += 1
+                    continue
+            for op in ops:
+                decision = gate(op, self.config)
+                if decision.apply:
+                    result = apply_op(self.repo, self.schema, op, raw_path, raw.pii,
+                                      agent_id=raw.agent_id, run_id=raw.run_id)
+                    written.append(result.page_id)
+                else:
+                    self.review_queue.add(op, raw_path, decision.reasons)
+                    reviewed += 1
+            self._mark(row_id, "done")
+
+        if written:
+            unique_pages = sorted(set(written))
+            self.on_pages_written(unique_pages)
+            self.git.commit_all(
+                f"strata: batch-compile {len(valid)} entr"
+                f"{'y' if len(valid) == 1 else 'ies'} -> {len(unique_pages)} page(s)"
+                + (f", {reviewed} queued for review" if reviewed else "")
+            )
+        elif reviewed:
+            log.info("%d op(s) queued for review (batch mode), nothing written", reviewed)
         return len(rows)
 
     def flush(self, timeout_s: float = 300.0) -> int:

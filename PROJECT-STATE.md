@@ -1,6 +1,6 @@
 # Strata — Project State & Architecture
 
-**Date:** 2026-07-09 · **Version:** strata-memory 0.3.0 · **Tests:** 133 passing
+**Date:** 2026-07-10 · **Version:** strata-memory 0.4.0 · **Tests:** 133 passing
 **Source of truth for the design:** [strata-deep-research-and-architecture.md](strata-deep-research-and-architecture.md) (Research Report v1.0, supersedes spec v2.0)
 
 This document answers four questions: how the system is built, what exactly is
@@ -92,12 +92,11 @@ sqlite pool) · `obs.py` (ledgers) · `util.py`.
 Everything not listed here is implemented end-to-end and covered by the test
 suite. The honest list:
 
-1. **`strata/write/pii.py` references a `presidio_scanner` module that does not
-   exist.** `get_scanner()` tries `from .presidio_scanner import PresidioScanner`,
-   catches ImportError, and falls back to the regex scanner — so behavior is
-   correct today, but installing the `[pii]` extra will NOT activate Presidio
-   until that ~20-line adapter file is written. This is the one dangling
-   reference in the codebase.
+1. **`strata/write/presidio_scanner.py` is now written and verified.** ✅
+   `get_scanner()` loads `PresidioScanner` when `[pii]` extras are installed
+   (presidio-analyzer + spaCy en_core_web_lg). Detects 30+ entity types
+   (PERSON, EMAIL_ADDRESS, PHONE_NUMBER, URL, SSN, CREDIT_CARD, etc.) with
+   ML-based context awareness. Falls back to `RegexScanner` when not installed.
 2. **The heuristic extractor is a floor, not a mock** — real code, really
    tested, deliberately modest: first-person pattern matching with head-noun
    subject keys. It measures the storage/retrieval machinery; extraction
@@ -106,12 +105,16 @@ suite. The honest list:
 3. **The Anthropic extractor is code-complete but never exercised against the
    live API** (no ANTHROPIC_API_KEY was available). Its structured-output,
    retry, and token-ledger paths are unit-tested against a fake client.
-4. **Vector L2 (`read/vectors.py`) is code-complete but unexercised** — the
-   `[vector]` extras aren't installed here; search silently and correctly stays
-   L1-lexical (tested behavior).
-5. **The MCP server is code-complete but not integration-tested** (the `mcp`
-   package isn't installed; import is lazy and the CLI errors with an install
-   hint — tested at import level only).
+4. **Vector L2 (`read/vectors.py`) is now active and verified.** ✅
+   `[vector]` extras installed (sqlite-vec + model2vec). Model
+   `minishlab/potion-base-8M` (256-dim) downloaded and operational. Memory
+   reports `vector_search: True`; search hits return `tier: L2`. RRF fusion
+   of L1+L2 is live.
+5. **The MCP server is now integration-tested and verified.** ✅ `mcp` package
+   installed. All 7 tools (`wiki_search`, `wiki_read`, `wiki_list`,
+   `wiki_ingest`, `wiki_supersede`, `wiki_history`, `wiki_review`) tested
+   end-to-end via FastMCP tool manager. Claude Desktop/Code config template
+   added at `strata/templates/mcp_config.json`.
 6. **The chatbot's no-LLM demo mode** is a labelled fallback (banner shown)
    when NVIDIA_API_KEY is absent; with the key set it runs the real Nemotron
    model (verified live: `nvidia/llama-3.3-nemotron-super-49b-v1.5`).
@@ -185,10 +188,15 @@ whole write/read pipeline are real and tested (133 tests).
 
 ## 8. Next steps (priority order, per the report's roadmap)
 
-1. Presidio adapter file (closes the one dangling reference) — ~20 lines.
-2. Install-and-measure the `[vector]` L2 path + reranker flag (§6.3 L3);
-   re-run the benchmark table to justify tiers with numbers (§10.8).
-3. Ollama extractor for air-gapped deployments (§5.8).
-4. Batch LLM compile (§9.8) and index-summary caching.
-5. FastAPI REST layer (§12 Phase 2); BEAM/HaluMem adapters (§11).
-6. Crypto-shred erasure mode; git-staging-branch review v2 (§6.6).
+1. ~~Presidio adapter file~~ ✅ Done — `strata/write/presidio_scanner.py`
+2. ~~Install-and-measure the `[vector]` L2 path~~ ✅ Done — sqlite-vec + model2vec active
+3. ~~MCP server integration test~~ ✅ Done — all 7 tools verified
+4. ~~FastAPI REST layer~~ ✅ Done — `strata/api.py`, 16 endpoints, `strata api` CLI command, `[api]` extra
+5. ~~Crypto-shred erasure~~ ✅ Done — `strata/storage/crypto_erasure.py`, AES-256-GCM, FileKeyStore + EnvKeyStore, `[crypto]` extra
+6. ~~Git-staging-branch review v2~~ ✅ Done — `strata/write/staging_review.py`, `review_backend: git` config
+7. ~~Batch LLM compile~~ ✅ Done — `strata/write/batch_extract.py`, `batch_extract_size` config, per-entry fallback
+8. ~~BEAM eval adapter~~ ✅ Done — `benchmarks/memory_evals/beam.py`, built-in fixture, per-category + turn-distance metrics
+9. ~~HaluMem eval adapter~~ ✅ Done — `benchmarks/memory_evals/halumem.py`, 3 hallucination types, safety rate metric
+10. Ollama extractor for air-gapped deployments (§5.8) — skipped per user request
+11. Multi-tenant / LanceDB tier (Phase 3)
+12. Documentation site

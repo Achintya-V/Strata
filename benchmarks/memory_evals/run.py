@@ -29,6 +29,8 @@ from .inhouse import run_inhouse
 from .locomo import LOCOMO_URL, download_locomo, run_locomo
 from .longmemeval import INSTRUCTIONS as LME_INSTRUCTIONS
 from .longmemeval import run_longmemeval
+from .beam import run_beam, BEAM_FIXTURE
+from .halumem import run_halumem
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -124,6 +126,12 @@ def main(argv: list[str] | None = None) -> list[BenchmarkResult]:
     ap.add_argument("--download-locomo", action="store_true",
                     help=f"download LoCoMo to benchmarks/datasets/ from {LOCOMO_URL}")
     ap.add_argument("--longmemeval", type=Path, help="path to longmemeval_*.json")
+    ap.add_argument("--beam", type=Path, default=None,
+                    help="path to BEAM JSON file (omit to use built-in fixture)")
+    ap.add_argument("--halumem", type=Path, default=None,
+                    help="path to HaluMem JSON file (omit to use built-in fixture)")
+    ap.add_argument("--skip-beam", action="store_true", help="skip BEAM evaluation")
+    ap.add_argument("--skip-halumem", action="store_true", help="skip HaluMem evaluation")
     ap.add_argument("--inhouse-repo", type=Path,
                     help="evaluate an existing Strata repo instead of the built-in scenario")
     ap.add_argument("--limit", type=int, default=None,
@@ -180,6 +188,29 @@ def main(argv: list[str] | None = None) -> list[BenchmarkResult]:
     console.print("[bold]In-house evaluator[/bold]")
     results.append(run_inhouse(work_dir, k=args.k, repo=args.inhouse_repo,
                                progress=console.print))
+
+    if not args.skip_beam:
+        console.print(f"[bold]BEAM[/bold] ({'built-in fixture' if not args.beam else args.beam})")
+        results.append(run_beam(
+            args.beam, work_dir, k=args.k, limit=args.limit,
+            llm=llm, force_heuristic=force_heuristic, progress=console.print,
+        ))
+    else:
+        console.print("[dim]BEAM skipped (--skip-beam)[/dim]")
+
+    if not args.skip_halumem:
+        console.print(f"[bold]HaluMem[/bold] ({'built-in fixture' if not args.halumem else args.halumem})")
+        bench_r, halu_r = run_halumem(
+            args.halumem, work_dir, k=args.k, limit=args.limit,
+            force_heuristic=force_heuristic, progress=console.print,
+        )
+        results.append(bench_r)
+        # Print HaluMem-specific safety summary
+        console.print(f"  [bold]HaluMem safety:[/bold] stale-leak={halu_r.stale_leak_rate():.3f} "
+                      f"contamination={halu_r.contamination_rate():.3f} "
+                      f"overall-safe={halu_r.overall_safety_rate():.3f}")
+    else:
+        console.print("[dim]HaluMem skipped (--skip-halumem)[/dim]")
 
     for r in results:
         print_benchmark(r)

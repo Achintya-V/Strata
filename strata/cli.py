@@ -345,5 +345,15 @@ def serve(repo: str = _REPO_OPT):
     mcp_main(repo)
 
 
+@app.command()
+def api(repo: str = _REPO_OPT,
+        host: str = typer.Option("0.0.0.0", help="Bind host"),
+        port: int = typer.Option(8000, help="Bind port"),
+        reload: bool = typer.Option(False, help="Auto-reload on code changes (dev only)")):
+    """Run the FastAPI REST server — needs `pip install strata-memory[api]`."""
+    from .api import main as api_main
+    api_main(repo_path=repo, host=host, port=port, reload=reload)
+
+
 if __name__ == "__main__":
     app()

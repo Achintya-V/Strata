@@ -24,8 +24,10 @@ class PipelineConfig(BaseModel):
     batch_size: int = 8            # raw entries per worker cycle
     interval_s: float = 2.0        # worker poll interval
     review: Literal["auto", "gated", "off"] = "auto"
+    review_backend: Literal["json", "git"] = "json"   # v1=json files, v2=git branches
     min_confidence: float = 0.3    # ops below this are queued for review in auto mode
     consolidate_after: int = 5     # appended Details sections before consolidation kicks in
+    batch_extract_size: int = 1    # entries per LLM call (1=per-entry, >1=batch mode §9.8)
 
 
 class SearchConfig(BaseModel):

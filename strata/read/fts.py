@@ -278,8 +278,20 @@ class Indexer:
         with self._db() as conn:
             rows = conn.execute(
                 "SELECT id, title, tags FROM pages WHERE status='active' ORDER BY id").fetchall()
-        lines = [f"{r['id']} | {r['title']} | {','.join((r['tags'] or '').split()[:5])}"
-                 for r in rows]
+            claims = conn.execute(
+                "SELECT page_id, subject FROM claims WHERE valid_until IS NULL").fetchall()
+        
+        subjects_by_page = {}
+        for c in claims:
+            if c['subject']:
+                subjects_by_page.setdefault(c['page_id'], set()).add(c['subject'])
+
+        lines = []
+        for r in rows:
+            pid = r['id']
+            tags = ','.join((r['tags'] or '').split()[:5])
+            subs = ','.join(sorted(list(subjects_by_page.get(pid, []))))
+            lines.append(f"{pid} | {r['title']} | {tags} | {subs}")
         return "\n".join(lines)[:max_chars]
 
     def counts(self) -> dict[str, Any]:

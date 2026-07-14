@@ -8,3 +8,9 @@ benchmarks/results/
 benchmarks/datasets/
 chat-memory/
 .streamlit/
+
+# Packaging
+dist/
+*.whl
+*.tar.gz
+.pypirc

@@ -98,7 +98,10 @@ class Repo:
         return [f"wiki/{prefix}", f"raw/{prefix}"]
 
     def page_path(self, page_id: str) -> Path:
-        path = (self.wiki_dir / f"{page_id}.md").resolve()
+        # Colons are invalid characters in Windows filenames. We replace them
+        # with dashes to ensure filesystem compatibility.
+        safe_id = page_id.replace(":", "-")
+        path = (self.wiki_dir / f"{safe_id}.md").resolve()
         if self.wiki_dir.resolve() not in path.parents:
             raise RepoError(f"page id escapes wiki/: {page_id!r}")
         return path
@@ -241,7 +244,8 @@ class Repo:
             if page.status.value != "active":
                 continue
             tags = ",".join(page.tags[:5])
-            lines.append(f"{page.id} | {page.title} | {tags}")
+            subjects = ",".join(sorted(list({c.subject for c in page.active_claims() if c.subject})))
+            lines.append(f"{page.id} | {page.title} | {tags} | {subjects}")
         text = "\n".join(lines)
         return text[:max_chars]
 

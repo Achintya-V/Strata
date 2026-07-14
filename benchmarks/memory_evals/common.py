@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 import string
 import time
+import os
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -197,6 +198,10 @@ def fresh_memory(root, name: str, force_heuristic: bool = True):
     background worker, and the deterministic heuristic extractor by default so
     runs are reproducible (pass force_heuristic=False + ANTHROPIC_API_KEY to
     measure LLM-compiled memory instead)."""
+    
+    if os.environ.get("STRATA_LLM_PROVIDER"):
+        force_heuristic = False
+
     from strata import Memory
     return Memory(repo_path=root / name, start_worker=False,
                   force_heuristic=force_heuristic)

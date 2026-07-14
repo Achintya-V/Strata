@@ -182,6 +182,8 @@ class WritePipeline:
                 log.error("extraction failed for %s: %s", raw_path, e)
                 continue
             for op in ops:
+                if op.user_id is None:
+                    op.user_id = raw.user_id
                 decision = gate(op, self.config)
                 if decision.apply:
                     result = apply_op(self.repo, self.schema, op, raw_path, raw.pii,
@@ -240,6 +242,8 @@ class WritePipeline:
                     failed += 1
                     continue
             for op in ops:
+                if op.user_id is None:
+                    op.user_id = raw.user_id
                 decision = gate(op, self.config)
                 if decision.apply:
                     result = apply_op(self.repo, self.schema, op, raw_path, raw.pii,

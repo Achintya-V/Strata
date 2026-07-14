@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 
 class LLMConfig(BaseModel):
-    provider: str = "anthropic"
+    provider: str = os.environ.get("STRATA_LLM_PROVIDER", "anthropic")
     compile_model: str = "claude-haiku-4-5-20251001"    # cheap, high-volume extraction
     judgment_model: str = "claude-sonnet-5"             # contradiction/lint judgment calls
 
@@ -27,7 +27,7 @@ class PipelineConfig(BaseModel):
     review_backend: Literal["json", "git"] = "json"   # v1=json files, v2=git branches
     min_confidence: float = 0.3    # ops below this are queued for review in auto mode
     consolidate_after: int = 5     # appended Details sections before consolidation kicks in
-    batch_extract_size: int = 1    # entries per LLM call (1=per-entry, >1=batch mode §9.8)
+    batch_extract_size: int = 8    # entries per LLM call (1=per-entry, >1=batch mode §9.8)
 
 
 class SearchConfig(BaseModel):
@@ -63,7 +63,10 @@ def _apply_env_overrides(data: dict) -> dict:
         section, key = parts
         data.setdefault(section, {})
         if isinstance(data[section], dict):
-            data[section][key] = yaml.safe_load(value)   # parses numbers/bools/strings
+            val = yaml.safe_load(value)
+            if val is False and value.lower() == "off":
+                val = "off"
+            data[section][key] = val
     return data
 
 

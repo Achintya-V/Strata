@@ -29,7 +29,8 @@ its page_id); create new pages only for genuinely new topics. Never create near-
 needed). Episodic what-happened summaries go on a session page.
 - Every claim gets a normalized snake-case `subject` key, stable across paraphrases (e.g. \
 "preference:seat", "employer", "attribute:favorite-color"). Contradicting facts about the same \
-subject MUST reuse the same subject key — that is how supersession works.
+subject MUST reuse the same subject key — that is how supersession works. If the index lists \
+active_subjects for a page, look at them and reuse the matching subject key if one exists.
 - provenance: `user_stated` ONLY for things the user explicitly said about themselves; \
 `agent_inferred` for your deductions; `tool_derived` for tool outputs quoted in the transcript.
 - confidence: 0.9+ explicit statements, 0.6-0.8 reasonable inference, below 0.5 speculation.
@@ -87,7 +88,7 @@ class AnthropicExtractor:
         ) or "- session"
         prompt = (
             f"Page types available:\n{type_lines}\n\n"
-            f"Existing pages (id | title | tags):\n{index_summary or '(none yet)'}\n\n"
+            f"Existing pages (id | title | tags | active_subjects):\n{index_summary or '(none yet)'}\n\n"
             f"Raw entry (source_type={raw.source_type}, user_id={raw.user_id or 'none'}, "
             f"recorded {raw.created}):\n<raw>\n{raw.text}\n</raw>"
         )

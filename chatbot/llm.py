@@ -42,6 +42,13 @@ class NemotronClient:
         self.api_key = (api_key or os.environ.get("NVIDIA_API_KEY", "")).strip()
         self.model = model or os.environ.get("NEMOTRON_MODEL", DEFAULT_MODEL)
         self.base_url = base_url or os.environ.get("NEMOTRON_BASE_URL", DEFAULT_BASE_URL)
+        
+        # Fall back to Azure OpenAI if NVIDIA key is missing but Azure OpenAI key is present
+        if not self.api_key and os.environ.get("AZURE_OPENAI_API_KEY"):
+            self.api_key = os.environ.get("AZURE_OPENAI_API_KEY", "").strip()
+            self.base_url = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+            self.model = model or os.environ.get("STRATA_LLM_COMPILE_MODEL", "gpt-4o-mini")
+            
         self._client = None
 
     @property

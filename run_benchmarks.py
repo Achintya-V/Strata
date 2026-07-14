@@ -64,7 +64,7 @@ def bench_latency(n: int = 500) -> dict:
         def _make_vector_index(self):
             return None   # skip model download for pure latency measurement
 
-    m = _LatencyMemory(repo_path=root, start_worker=False)
+    m = _LatencyMemory(repo_path=root, start_worker=False, force_heuristic=True)
     topics = ["travel", "food", "work", "health", "finance", "learning",
               "family", "sports", "tech", "music"]
     add_ms = []
@@ -687,19 +687,25 @@ def main():
     ap.add_argument("--out",             type=Path, help="output JSON path")
     args = ap.parse_args()
 
+    from dotenv import load_dotenv
+    load_dotenv(".env")
+    import os
+
     console.rule("[bold green]Strata Competitive Benchmark[/bold green]")
-    console.print("[dim]Running all benchmarks offline (heuristic extractor).[/dim]")
+    provider = os.environ.get("STRATA_LLM_PROVIDER")
+    if provider:
+        console.print(f"[yellow]Running benchmarks ONLINE (LLM provider: {provider})[/yellow]")
+    else:
+        console.print("[dim]Running all benchmarks offline (heuristic extractor).[/dim]")
     if args.with_llm:
-        console.print("[yellow]--with-llm: loading NVIDIA client...[/yellow]")
+        console.print("[yellow]--with-llm: loading LLM grading client...[/yellow]")
 
     llm = None
     if args.with_llm:
-        from dotenv import load_dotenv
-        load_dotenv(".env")
         from chatbot.llm import NemotronClient
         llm = NemotronClient()
         if not llm.available:
-            console.print("[red]NVIDIA_API_KEY not set — running without LLM grading[/red]")
+            console.print("[red]Neither NVIDIA_API_KEY nor AZURE_OPENAI_API_KEY is set — running without LLM grading[/red]")
             llm = None
 
     work_dir = Path(tempfile.mkdtemp(prefix="strata-bench-"))

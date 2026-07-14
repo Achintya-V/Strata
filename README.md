@@ -42,6 +42,85 @@ Optional extras:
 Everything degrades gracefully: no API key → offline heuristic extractor;
 no vector extra → lexical BM25 only. Core never imports torch.
 
+## Quickstart
+
+### Any chatbot (3 lines)
+
+```python
+from strata import Memory
+
+m = Memory(repo_path="./my-memory")
+m.add("I'm vegetarian and prefer window seats", user_id="alice")
+context = m.search("alice food preferences", user_id="alice", format="context")
+# inject `context` into your LLM system prompt
+```
+
+### OpenAI
+
+```python
+from openai import OpenAI
+from strata import Memory
+
+client = OpenAI()
+memory = Memory(repo_path="./my-memory")
+
+def chat(message: str, user_id: str) -> str:
+    context = memory.search(message, user_id=user_id, format="context")
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": f"You are helpful.\n\n{context}"},
+            {"role": "user",   "content": message},
+        ],
+    )
+    reply = response.choices[0].message.content
+    memory.add(f"user: {message}\nassistant: {reply}", user_id=user_id)
+    return reply
+```
+
+### Anthropic Claude
+
+```python
+import anthropic
+from strata import Memory
+
+client = anthropic.Anthropic()
+memory = Memory(repo_path="./my-memory")
+
+def chat(message: str, user_id: str) -> str:
+    context = memory.search(message, user_id=user_id, format="context")
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001", max_tokens=1024,
+        system=f"You are helpful.\n\n{context}",
+        messages=[{"role": "user", "content": message}],
+    )
+    reply = response.content[0].text
+    memory.add(f"user: {message}\nassistant: {reply}", user_id=user_id)
+    return reply
+```
+
+### Async (FastAPI, aiohttp)
+
+```python
+from strata import AsyncMemory
+
+async with AsyncMemory(repo_path="./my-memory") as memory:
+    await memory.add("I prefer dark roast coffee", user_id="carol")
+    context = await memory.search(
+        "carol preferences", user_id="carol", format="context"
+    )
+```
+
+### More examples
+
+| File | What it shows |
+|------|---------------|
+| `examples/simple_chatbot.py` | Offline, zero API keys |
+| `examples/openai_chatbot.py` | OpenAI GPT integration |
+| `examples/anthropic_chatbot.py` | Anthropic Claude integration |
+| `examples/async_chatbot.py` | AsyncMemory + point-in-time queries |
+| `examples/fastapi_app.py` | Production REST API with memory |
+
 ## What makes it different
 
 - **Bi-temporal claim ledger.** Every fact is a claim with `valid_from` /
@@ -110,18 +189,20 @@ CLI: `strata init · ingest · search · list · read · history · review · fo
 merge-users · sweep · lint · eval · stats · doctor · reindex · export · import ·
 claim · serve` (MCP).
 
-## Honest numbers (this machine: Windows 11, commodity CPU, 1K pages)
+## Honest numbers (this machine: Windows 11, commodity CPU)
 
-| op | p50 | p95 |
-|---|---|---|
-| `add()` enqueue | 6.3 ms | 9.1 ms |
-| `search()` lexical | 8.0 ms | 12.2 ms |
-| `search(format="context")` | 11.1 ms | 12.5 ms |
+| op | L1 p50 | L2 p50 | Mem0 reference |
+|---|---|---|---|
+| `add()` enqueue | 2.5 ms | 2.5 ms | ~6 ms |
+| `search()` | 1.7 ms | **0.9 ms** | ~8 ms |
+| `search(format="context")` | 2.3 ms | **1.3 ms** | ~11 ms |
+| Temporal hit@5 | **1.000** | **1.000** | Hippo: 0.944 |
+| Stale-leak rate | **0.000** | **0.000** | — |
+| Multi-user isolation | **100%** | **100%** | — |
 
-Reproduce: `python benchmarks/bench.py 1000`. NTFS file creation dominates
-`add()`; Linux numbers are lower. Compilation (extract → resolve → one git
-commit per batch) runs off the hot path at ~7 entries/s end-to-end on this
-machine — git subprocess commits are the ceiling there.
+L1 = BM25 only (default). L2 = BM25 + vector (install `[vector]` extra).
+
+Reproduce: `python benchmarks/bench.py 1000`
 
 ## Known limitations (by design, documented per §13 of the research report)
 

@@ -31,11 +31,19 @@ def get_extractor(config: Config, ledgers: Optional[Ledgers] = None,
     """LLM extraction when a key + SDK are available, heuristic floor otherwise."""
     from .heuristic import HeuristicExtractor
 
-    if not force_heuristic and config.llm.provider == "anthropic" and os.environ.get("ANTHROPIC_API_KEY"):
-        try:
-            from .anthropic_llm import AnthropicExtractor
-            return AnthropicExtractor(config, ledgers)
-        except ImportError:
-            log.warning("ANTHROPIC_API_KEY set but `anthropic` package missing "
-                        "(pip install strata-memory[llm]) — using heuristic extractor")
+    if not force_heuristic:
+        if config.llm.provider == "anthropic" and os.environ.get("ANTHROPIC_API_KEY"):
+            try:
+                from .anthropic_llm import AnthropicExtractor
+                return AnthropicExtractor(config, ledgers)
+            except ImportError:
+                log.warning("ANTHROPIC_API_KEY set but `anthropic` package missing "
+                            "(pip install strata-memory[llm]) — using heuristic extractor")
+        elif config.llm.provider == "azure_openai" and os.environ.get("AZURE_OPENAI_API_KEY"):
+            try:
+                from .azure_openai_llm import AzureOpenAIExtractor
+                return AzureOpenAIExtractor(config, ledgers)
+            except ImportError:
+                log.warning("AZURE_OPENAI_API_KEY set but `openai` package missing "
+                            "— using heuristic extractor")
     return HeuristicExtractor()

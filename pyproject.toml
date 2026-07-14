@@ -5,6 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "strata-memory"
 version = "0.4.0"
+authors = [
+  { name = "Strata Team", email = "team@strata.ai" }
+]
 description = "Git-native memory layer for any chatbot: Mem0-shaped API over plain markdown + git, with a bi-temporal claim ledger, provenance typing, compliance-grade erasure, FastAPI REST layer, and hallucination-safety evals."
 readme = "README.md"
 requires-python = ">=3.10"

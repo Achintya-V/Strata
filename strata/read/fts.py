@@ -1,14 +1,20 @@
 """SQLite FTS5 index — the DERIVED cache (never the source of truth).
 
 Invariant: delete .strata/index.db and `reindex()` rebuilds everything from
-wiki/*.md and raw/. Three FTS tables:
+wiki/*.md and raw/. Four FTS tables:
 
 - pages_fts  — compiled pages (title/tags/summary/body)
+- chunks_fts — page bodies split into small turn-window chunks. Whole-page BM25
+               dilutes when the relevant lines are a tiny slice of a long
+               episodic page; chunk-level matching fixes that (§10.1) and the
+               best-matching chunk doubles as the evidence excerpt the packer
+               puts into context.
 - claims_fts — individual ledger claims (enables temporal + provenance search)
 - raw_fts    — raw entries; the stopgap that makes writes searchable *before*
                async compilation lands (§5.2)
 
-Connections are per-operation (cheap, WAL) so worker threads never share one.
+INDEX_SCHEMA_VERSION guards migrations: when the on-disk layout is older,
+Memory triggers one automatic full reindex (cheap, derived data only).
 """
 from __future__ import annotations
 
@@ -46,18 +52,81 @@ CREATE VIRTUAL TABLE IF NOT EXISTS claims_fts USING fts5(
 CREATE VIRTUAL TABLE IF NOT EXISTS raw_fts USING fts5(
     path UNINDEXED, user_id UNINDEXED, text, tokenize='porter unicode61'
 );
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    page_id UNINDEXED, seq UNINDEXED, text, tokenize='porter unicode61'
+);
+CREATE TABLE IF NOT EXISTS page_sources (
+    page_id TEXT NOT NULL, raw_path TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sources_raw ON page_sources(raw_path);
+CREATE INDEX IF NOT EXISTS idx_sources_page ON page_sources(page_id);
 """
 
+INDEX_SCHEMA_VERSION = "4"          # bumped when tables/semantics change
+
 _TOKEN = re.compile(r"\w+", re.UNICODE)
+
+# Query-side stopwords: dropped from OR-joined match expressions so BM25 ranks
+# on content words instead of "what/did/the" noise (also fewer terms = faster).
+# Small and English-only by design — if EVERY token is a stopword we fall back
+# to using them all, so nothing becomes unsearchable.
+_QUERY_STOPWORDS = frozenset("""
+a an and are as at be but by did do does for from had has have how i in into is
+it its me my of on or our s so that the their them they this to was we were
+what when where which who whom why will with you your
+""".split())
 
 
 def fts_query(query: str) -> Optional[str]:
     """Build a safe OR-joined FTS5 match expression (partial-overlap queries
-    still surface results; special characters can't break the parser)."""
+    still surface results; special characters can't break the parser).
+    Stopwords are dropped when content words remain."""
     tokens = _TOKEN.findall(query.lower())
     if not tokens:
         return None
-    return " OR ".join(f'"{t}"' for t in tokens[:32])
+    content = [t for t in tokens if t not in _QUERY_STOPWORDS]
+    return " OR ".join(f'"{t}"' for t in (content or tokens)[:32])
+
+
+# ---------------- body chunking ----------------
+
+_CHUNK_TARGET_CHARS = 280           # ~2-3 dialog turns; finer granularity beats
+                                    # whole-page BM25 dilution (eval-tuned)
+_CHUNK_MAX_PER_PAGE = 400           # safety cap for pathological pages
+_DATE_LINE = re.compile(r"^\(.{0,60}\bon .{4,40}\)$")   # "(chat session on 8 May, 2023)"
+
+
+def chunk_body(body: str) -> list[str]:
+    """Split a page body into line-grouped chunks of ~_CHUNK_TARGET_CHARS.
+    A leading date/context line like "(conversation session on 8 May, 2023)"
+    is carried into every chunk so temporal queries match at chunk level."""
+    lines = [ln for ln in body.splitlines() if ln.strip()]
+    if not lines:
+        return []
+    prefix = ""
+    if _DATE_LINE.match(lines[0].strip()):
+        prefix = lines[0].strip()
+        lines = lines[1:]
+    chunks: list[str] = []
+    current: list[str] = []
+    size = 0
+    for line in lines:
+        # very long single lines are split on their own boundaries
+        while len(line) > _CHUNK_TARGET_CHARS * 2:
+            head, line = line[:_CHUNK_TARGET_CHARS * 2], line[_CHUNK_TARGET_CHARS * 2:]
+            current.append(head)
+            chunks.append("\n".join(current))
+            current, size = [], 0
+        current.append(line)
+        size += len(line)
+        if size >= _CHUNK_TARGET_CHARS:
+            chunks.append("\n".join(current))
+            current, size = [], 0
+    if current:
+        chunks.append("\n".join(current))
+    if prefix:
+        chunks = [f"{prefix}\n{c}" for c in chunks] or [prefix]
+    return chunks[:_CHUNK_MAX_PER_PAGE]
 
 
 class Indexer:
@@ -103,6 +172,14 @@ class Indexer:
             "INSERT INTO pages_fts (id, title, tags, summary, body) VALUES (?,?,?,?,?)",
             (page.id, page.title, " ".join(page.tags), page.summary, body),
         )
+        conn.execute("DELETE FROM chunks_fts WHERE page_id=?", (page.id,))
+        for seq, chunk in enumerate(chunk_body(body)):
+            conn.execute("INSERT INTO chunks_fts (page_id, seq, text) VALUES (?,?,?)",
+                         (page.id, seq, chunk))
+        conn.execute("DELETE FROM page_sources WHERE page_id=?", (page.id,))
+        for src in page.sources:
+            conn.execute("INSERT INTO page_sources (page_id, raw_path) VALUES (?,?)",
+                         (page.id, src))
         for c in page.claims:
             conn.execute(
                 "INSERT OR REPLACE INTO claims VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -125,9 +202,15 @@ class Indexer:
                 self.index_page(*parsed)
 
     def index_raw(self, entry: RawEntry) -> None:
+        """Raw entries are indexed CHUNKED (multiple rows per path): whole-entry
+        BM25 dilutes exactly like whole-page BM25 did, and raw text is the only
+        place verbatim wording survives when an LLM extractor summarizes.
+        One executemany in one transaction keeps the add() hot path flat."""
+        chunks = chunk_body(entry.text) or [entry.text]
         with self._db() as conn:
-            conn.execute("INSERT INTO raw_fts (path, user_id, text) VALUES (?,?,?)",
-                         (entry.path, entry.user_id, entry.text))
+            conn.executemany(
+                "INSERT INTO raw_fts (path, user_id, text) VALUES (?,?,?)",
+                [(entry.path, entry.user_id, c) for c in chunks])
 
     def remove_user(self, user_id: str) -> None:
         with self._db() as conn:
@@ -139,6 +222,8 @@ class Indexer:
     def _remove_page_conn(self, conn: sqlite3.Connection, page_id: str) -> None:
         conn.execute("DELETE FROM pages WHERE id=?", (page_id,))
         conn.execute("DELETE FROM pages_fts WHERE id=?", (page_id,))
+        conn.execute("DELETE FROM chunks_fts WHERE page_id=?", (page_id,))
+        conn.execute("DELETE FROM page_sources WHERE page_id=?", (page_id,))
         conn.execute(
             "DELETE FROM claims_fts WHERE claim_id IN (SELECT id FROM claims WHERE page_id=?)",
             (page_id,))
@@ -148,7 +233,8 @@ class Indexer:
         """Full rebuild from markdown — the recovery path proving the invariant."""
         n = 0
         with self._db() as conn:
-            for table in ("pages", "pages_fts", "claims", "claims_fts", "raw_fts"):
+            for table in ("pages", "pages_fts", "claims", "claims_fts", "raw_fts",
+                          "chunks_fts", "page_sources"):
                 conn.execute(f"DELETE FROM {table}")
             for page, body in repo.iter_pages():
                 self._index_page_conn(conn, page, body)
@@ -159,10 +245,29 @@ class Indexer:
                         continue
                     entry = repo.read_raw(repo.rel(path))
                     if entry is not None:
-                        conn.execute("INSERT INTO raw_fts (path, user_id, text) VALUES (?,?,?)",
-                                     (entry.path, entry.user_id, entry.text))
+                        conn.executemany(
+                            "INSERT INTO raw_fts (path, user_id, text) VALUES (?,?,?)",
+                            [(entry.path, entry.user_id, c)
+                             for c in (chunk_body(entry.text) or [entry.text])])
+            conn.execute("INSERT OR REPLACE INTO meta VALUES ('index_schema', ?)",
+                         (INDEX_SCHEMA_VERSION,))
         log.info("reindexed %d pages", n)
         return n
+
+    def schema_current(self) -> bool:
+        """False when the on-disk index predates this code's schema (e.g. no
+        chunks yet) and a one-time reindex is needed."""
+        with self._db() as conn:
+            row = conn.execute("SELECT value FROM meta WHERE key='index_schema'").fetchone()
+            if row and row["value"] == INDEX_SCHEMA_VERSION:
+                return True
+            # fresh empty DBs are current by definition — stamp and move on
+            has_pages = conn.execute("SELECT 1 FROM pages LIMIT 1").fetchone()
+            if not has_pages:
+                conn.execute("INSERT OR REPLACE INTO meta VALUES ('index_schema', ?)",
+                             (INDEX_SCHEMA_VERSION,))
+                return True
+        return False
 
     # ---------------- queries ----------------
 
@@ -201,15 +306,82 @@ class Indexer:
         with self._db() as conn:
             if match is None:
                 return []
+            # rank in a slim inner query (rowid+rank only), snippet() outside:
+            # the sorter otherwise materializes snippet() for EVERY matching
+            # row, which is what made broad queries cost ~15ms at 1K pages.
             rows = conn.execute(
-                f"""SELECT p.*, snippet(pages_fts, 3, '[', ']', '…', 12) AS snip,
-                           bm25(pages_fts) AS rank
-                    FROM pages_fts JOIN pages p ON p.id = pages_fts.id
-                    WHERE pages_fts MATCH ? AND {where}
+                f"""SELECT p2.*, snippet(pages_fts, 3, '[', ']', '…', 12) AS snip,
+                           r.rank AS rank
+                    FROM (
+                        SELECT pages_fts.rowid AS rid, bm25(pages_fts) AS rank,
+                               p.id AS pid
+                        FROM pages_fts JOIN pages p ON p.id = pages_fts.id
+                        WHERE pages_fts MATCH ? AND {where}
+                        ORDER BY rank LIMIT ?
+                    ) r
+                    JOIN pages_fts ON pages_fts.rowid = r.rid
+                    JOIN pages p2 ON p2.id = r.pid
+                    ORDER BY r.rank""",
+                [match, *params, limit],
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def search_chunks(self, query: str, type: Optional[str] = None,
+                      user_id: Optional[str] = None, statuses: tuple[str, ...] = ("active",),
+                      limit: int = 24) -> list[dict[str, Any]]:
+        """BM25-ranked chunk hits joined to their pages. Small rows make this
+        the precision signal for long episodic pages; the top chunk per page is
+        the evidence excerpt the packer can show."""
+        match = fts_query(query)
+        if match is None:
+            return []
+        filters, params = ["p.status IN (%s)" % ",".join("?" * len(statuses))], list(statuses)
+        if type:
+            filters.append("p.type=?")
+            params.append(type)
+        if user_id:
+            filters.append("(p.user_id=? OR p.user_id IS NULL)")
+            params.append(user_id)
+        where = " AND ".join(filters)
+        with self._db() as conn:
+            rows = conn.execute(
+                f"""SELECT chunks_fts.page_id AS page_id, chunks_fts.text AS chunk,
+                           bm25(chunks_fts) AS rank
+                    FROM chunks_fts JOIN pages p ON p.id = chunks_fts.page_id
+                    WHERE chunks_fts MATCH ? AND {where}
                     ORDER BY rank LIMIT ?""",
                 [match, *params, limit],
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # a page citing more raws than this is an aggregator (profile/entity/topic
+    # hub): it gets found via its own chunks/claims, never via the raw vote —
+    # otherwise it squats the top-k on every query (measured on LoCoMo).
+    _RAW_VOTE_MAX_SOURCES = 3
+
+    def pages_citing(self, raw_paths: list[str]) -> dict[str, list[str]]:
+        """raw_path -> the SPECIFIC pages compiled from it. This is what lets a
+        lexical match on immutable raw text vote for the page that summarized
+        it — essential when an LLM extractor compresses sessions into clean
+        prose that no longer contains the verbatim terms (§5.2 raw stopgap,
+        promoted to a ranking signal). User profiles and aggregator pages
+        (> _RAW_VOTE_MAX_SOURCES sources) are excluded."""
+        if not raw_paths:
+            return {}
+        placeholders = ",".join("?" * len(raw_paths))
+        with self._db() as conn:
+            rows = conn.execute(
+                f"""SELECT ps.raw_path, ps.page_id FROM page_sources ps
+                    JOIN pages p ON p.id = ps.page_id
+                    WHERE ps.raw_path IN ({placeholders}) AND p.type != 'user'
+                      AND (SELECT COUNT(*) FROM page_sources ps2
+                           WHERE ps2.page_id = ps.page_id) <= ?""",
+                [*raw_paths, self._RAW_VOTE_MAX_SOURCES],
+            ).fetchall()
+        out: dict[str, list[str]] = {}
+        for r in rows:
+            out.setdefault(r["raw_path"], []).append(r["page_id"])
+        return out
 
     def search_claims(self, query: str, user_id: Optional[str] = None,
                       as_of: Optional[str] = None, include_superseded: bool = False,

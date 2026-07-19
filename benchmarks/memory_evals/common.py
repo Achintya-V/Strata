@@ -82,6 +82,11 @@ class CaseResult:
     em: Optional[bool] = None      # LLM mode only
     f1: Optional[float] = None
     prediction: str = ""
+    # True R@k — the standard retrieval metric: is a gold *evidence* page among
+    # the top-k results? (answer-presence above is a proxy with a dataset-
+    # dependent ceiling: derived/paraphrased golds never appear verbatim.)
+    evidence_hit: Optional[bool] = None    # any evidence page retrieved
+    evidence_all: Optional[bool] = None    # every evidence page retrieved
 
 
 @dataclass
@@ -119,6 +124,9 @@ class BenchmarkResult:
                 "in_context": round(sum(c.in_context for c in items) / len(items), 4),
                 "in_pages": round(sum(c.in_pages for c in items) / len(items), 4),
             }
+            ev = [c.evidence_hit for c in items if c.evidence_hit is not None]
+            if ev:
+                out[cat]["r_at_k"] = round(sum(ev) / len(ev), 4)
             f1s = [c.f1 for c in items if c.f1 is not None]
             if f1s:
                 out[cat]["f1"] = round(sum(f1s) / len(f1s), 4)
@@ -134,6 +142,9 @@ class BenchmarkResult:
             "latency_ms_p50": round(self.p50("latency_ms"), 1),
             "notes": self.notes,
         }
+        if any(c.evidence_hit is not None for c in self.cases):
+            s["r_at_k"] = self.rate("evidence_hit")
+            s["r_at_k_all"] = self.rate("evidence_all")
         if any(c.f1 is not None for c in self.cases):
             s["em"] = self.rate("em")
             s["f1"] = self.mean("f1")
@@ -144,8 +155,10 @@ class BenchmarkResult:
 # ---------------- QA evaluation against one Memory ----------------
 
 def evaluate_question(memory, question: str, gold: str, user_id: str, qid: str,
-                      category: str, k: int, llm=None) -> CaseResult:
-    """Retrieve for one question, measure presence (and optionally answer+grade)."""
+                      category: str, k: int, llm=None,
+                      evidence_pages: Optional[list[str]] = None) -> CaseResult:
+    """Retrieve for one question, measure presence (and optionally answer+grade).
+    When the dataset names gold evidence pages, true R@k is recorded too."""
     t0 = time.perf_counter()
     context = memory.search(question, user_id=user_id, top_k=k, format="context")
     hits = memory.searcher.search(question, user_id=user_id, top_k=k)
@@ -164,6 +177,17 @@ def evaluate_question(memory, question: str, gold: str, user_id: str, qid: str,
         in_pages=presence("\n".join(page_text), gold),
         latency_ms=latency_ms, context_tokens=est_tokens(context) if context else 0,
     )
+    if evidence_pages:
+        # each entry is one evidence item = the GROUP of pages that carry its
+        # content (with LLM extraction, one session's facts may be routed onto
+        # another page — any page sourcing that session satisfies the item).
+        # An empty group means extraction dropped the evidence entirely: that
+        # counts as a miss (end-to-end memory recall, not retrieval-only).
+        groups = [list(g) if isinstance(g, (list, set, tuple)) else [g]
+                  for g in evidence_pages]
+        topk = {h.page_id for h in hits}
+        result.evidence_hit = any(any(p in topk for p in g) for g in groups)
+        result.evidence_all = all(any(p in topk for p in g) for g in groups)
     if llm is not None:
         prediction = answer_with_llm(llm, context, question)
         result.prediction = prediction

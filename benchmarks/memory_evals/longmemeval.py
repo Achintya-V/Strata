@@ -47,20 +47,22 @@ def _session_text(turns: list[dict], date: str) -> str:
     return "\n".join(lines)
 
 
-def ingest_instance(memory, instance: dict, user_id: str) -> int:
+def ingest_instance(memory, instance: dict, user_id: str) -> dict[str, str]:
+    """Ingest haystack sessions; returns {session_id: raw_path} so
+    answer_session_ids can be traced to the pages compiled from them."""
     sessions = instance.get("haystack_sessions", [])
     dates = instance.get("haystack_dates", [])
     ids = instance.get("haystack_session_ids", [])
-    n = 0
+    raw_by_session: dict[str, str] = {}
     for i, turns in enumerate(sessions):
         date = dates[i] if i < len(dates) else ""
-        origin = ids[i] if i < len(ids) else f"session-{i}"
+        origin = str(ids[i]) if i < len(ids) else f"session-{i}"
         text = _session_text(turns, date)
         if text.strip():
-            memory.add(text, user_id=user_id, origin=str(origin))
-            n += 1
+            result = memory.add(text, user_id=user_id, origin=origin)
+            raw_by_session[origin] = result.get("raw_path", "")
     memory.flush()
-    return n
+    return raw_by_session
 
 
 def run_longmemeval(path: Path, work_dir: Path, k: int = 5,
@@ -83,12 +85,18 @@ def run_longmemeval(path: Path, work_dir: Path, k: int = 5,
             if qid.endswith("_abs") or not gold:
                 result.skipped += 1
                 continue
-            n_sessions = ingest_instance(memory, inst, user_id)
+            raw_by_session = ingest_instance(memory, inst, user_id)
             if i % 10 == 0:
-                progress(f"  LongMemEval {i + 1}/{len(instances)} ({n_sessions} sessions)")
+                progress(f"  LongMemEval {i + 1}/{len(instances)} ({len(raw_by_session)} sessions)")
+            from .locomo import pages_by_raw_source
+            pages_by_raw = pages_by_raw_source(memory, user_id)
+            evidence = [pages_by_raw.get(raw_by_session[str(sid)], [])
+                        for sid in inst.get("answer_session_ids", [])
+                        if str(sid) in raw_by_session]
             result.cases.append(evaluate_question(
                 memory, inst.get("question", ""), gold, user_id, qid=qid,
                 category=inst.get("question_type", "unknown"), k=k, llm=llm,
+                evidence_pages=evidence,
             ))
     finally:
         memory.close()

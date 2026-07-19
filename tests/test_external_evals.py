@@ -52,9 +52,42 @@ def test_locomo_fixture_end_to_end(tmp_path):
     assert result.skipped == 1
     # answers appear verbatim in session text -> retrieval-level recall must be perfect
     assert result.rate("in_pages") == 1.0
+    # true R@5: gold evidence sessions must be retrieved in top-5
+    assert result.summary()["r_at_k"] == 1.0
+    assert result.summary()["r_at_k_all"] == 1.0
     cats = result.by_category()
     assert any(c.startswith("4:") for c in cats)    # category labels preserved
     assert all(c.latency_ms >= 0 for c in result.cases)
+
+
+def test_evidence_group_semantics(tmp_path):
+    """any/all evidence semantics incl. LLM-routing groups and dropped evidence."""
+    from strata import Memory
+    from benchmarks.memory_evals.common import evaluate_question
+    m = Memory(repo_path=tmp_path / "ev", start_worker=False)
+    try:
+        m.add("user: the tapir enclosure opens at dawn", user_id="e")
+        m.flush()
+        pid = next(p["id"] for p in m.get_all(user_id="e")
+                   if p["metadata"]["type"] == "session")
+        # group containing the retrieved page (plus an alternative) -> hit
+        case = evaluate_question(m, "tapir enclosure", "dawn", "e", "q1", "c", k=5,
+                                 evidence_pages=[[pid, "g/concept/other"]])
+        assert case.evidence_hit is True and case.evidence_all is True
+        # two groups, one empty (evidence dropped at extraction) -> any=True, all=False
+        case = evaluate_question(m, "tapir enclosure", "dawn", "e", "q2", "c", k=5,
+                                 evidence_pages=[[pid], []])
+        assert case.evidence_hit is True and case.evidence_all is False
+        # only an unretrievable group -> miss
+        case = evaluate_question(m, "tapir enclosure", "dawn", "e", "q3", "c", k=5,
+                                 evidence_pages=[["g/concept/nope"]])
+        assert case.evidence_hit is False and case.evidence_all is False
+        # no evidence at all -> metrics stay None (excluded from aggregates)
+        case = evaluate_question(m, "tapir enclosure", "dawn", "e", "q4", "c", k=5,
+                                 evidence_pages=None)
+        assert case.evidence_hit is None and case.evidence_all is None
+    finally:
+        m.close()
 
 
 def test_locomo_loader_rejects_garbage(tmp_path):
@@ -108,14 +141,24 @@ def test_inhouse_against_existing_repo(tmp_path):
 # ---------------- chatbot client ----------------
 
 def test_nemotron_client_env_handling(monkeypatch):
-    from chatbot.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, NemotronClient
-    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
-    c = NemotronClient(api_key="")                  # explicit empty: unavailable
-    # .env at project root may set a real key; explicit args must win
-    assert c.model and c.base_url
+    import chatbot.llm as llm_mod
+    from chatbot.llm import NemotronClient
+    # the constructor re-loads .env (which may hold real keys) — neutralize it
+    # so this test controls the environment completely
+    monkeypatch.setattr(llm_mod, "load_env", lambda: None)
+    for var in ("NVIDIA_API_KEY", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"):
+        monkeypatch.delenv(var, raising=False)
+
+    c = NemotronClient(api_key="")                  # nothing anywhere: unavailable
+    assert not c.available and c.model and c.base_url
     c2 = NemotronClient(api_key="test", model="m", base_url="http://x")
     assert c2.available and c2.model == "m" and c2.base_url == "http://x"
     c3 = NemotronClient(api_key=" ")
     assert not c3.available
     with pytest.raises(RuntimeError):
         c3.chat("sys", [])
+    # the team's Azure fallback: empty NVIDIA key + Azure creds -> available
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "azure-test")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "http://azure")
+    c4 = NemotronClient(api_key="")
+    assert c4.available and c4.base_url == "http://azure"

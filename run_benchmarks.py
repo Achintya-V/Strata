@@ -157,12 +157,18 @@ def bench_locomo(locomo_path: Path, work_dir: Path, k: int = 5,
         "latency_ms_p50": s["latency_ms_p50"],
         "by_category": r.by_category(),
     }
+    # true retrieval metric: gold evidence session among the top-k pages
+    if "r_at_k" in s:
+        result["r_at_5"] = s["r_at_k"]
+        result["r_at_5_all_evidence"] = s["r_at_k_all"]
+    if "answer_presence_ceiling" in s:
+        result["answer_presence_ceiling"] = s["answer_presence_ceiling"]
     if "f1" in s:
         result["em"] = s["em"]
         result["f1"] = s["f1"]
-    console.print(f"  R@{k} in-context={result['answer_in_context']}  "
-                  f"in-pages={result['answer_in_pages']}  "
-                  f"ctx-tokens-p50={result['context_tokens_p50']}")
+    console.print(f"  R@{k} (evidence recall)={result.get('r_at_5', 'n/a')}  "
+                  f"answer-in-context={result['answer_in_context']}  "
+                  f"(presence ceiling={result.get('answer_presence_ceiling', 'n/a')})")
     return result
 
 
@@ -550,13 +556,20 @@ def print_report(results: dict) -> None:
         t.add_column("metric"); t.add_column("Strata", justify="right")
         t.add_column("Letta/MemGPT (reference)", justify="right")
         t.add_column("Khoj (reference)", justify="right")
-        t.add_row("answer-in-context", f"{loc['answer_in_context']:.3f}", "0.685", "0.832")
-        t.add_row("answer-in-pages",   f"{loc['answer_in_pages']:.3f}",   "-",     "-")
+        if "r_at_5" in loc:
+            t.add_row("R@5 (evidence recall)", f"{loc['r_at_5']:.3f}", "0.685", "0.832")
+            t.add_row("R@5 (ALL evidence in top-5)", f"{loc['r_at_5_all_evidence']:.3f}", "-", "-")
+        t.add_row("answer-in-context (proxy)", f"{loc['answer_in_context']:.3f}", "-", "-")
+        if "answer_presence_ceiling" in loc:
+            t.add_row("  └ presence ceiling*", f"{loc['answer_presence_ceiling']:.3f}", "-", "-")
+        t.add_row("answer-in-pages (proxy)", f"{loc['answer_in_pages']:.3f}",   "-",     "-")
         t.add_row("ctx tokens p50",    str(loc["context_tokens_p50"]),    "-",     "-")
         t.add_row("cases",             str(loc["cases"]),                 "-",     "-")
         if "f1" in loc:
             t.add_row("F1 (LLM graded)", f"{loc['f1']:.3f}", "-", "-")
         console.print(t)
+        console.print("[dim]  *ceiling: fraction of gold answers that appear verbatim ANYWHERE in the "
+                      "conversation — the presence proxy cannot exceed it regardless of retriever.[/dim]")
 
     # --- HaluMem ---
     hal = results.get("halumem", {})

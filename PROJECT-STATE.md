@@ -83,7 +83,8 @@ sqlite pool) · `obs.py` (ledgers) · `util.py`.
 | §4.4/§11 | Eval harness: domain eval from supersession history; LoCoMo/LongMemEval adapters | ✅ domain eval in-library; benchmark adapters in `benchmarks/memory_evals/` (real LoCoMo run verified; LongMemEval adapter format-verified, dataset needs manual download). BEAM/HaluMem **not built** |
 | §4.6 | Identity: aliases + merge-users | ✅ minimal version implemented + tested (probabilistic resolution out of scope, as the report says) |
 | §6.3 | Tiered read L0/L1/L2 + RRF | ✅ L0/L1 + RRF tested; L2 code-complete but inactive without `[vector]` extras (see §4). L3 reranker **not built** |
-| §9 | Latency engineering | ✅ add() 6.3ms p50 / search 8ms p50 @1K pages (measured, reproducible via `benchmarks/bench.py`) |
+| §9 | Latency engineering | ✅ add() 8.2ms p50 / search 6.9ms p50 @1K pages incl. chunk-level retrieval (measured, reproducible via `benchmarks/bench.py`) |
+| §10.1 | Chunk-level retrieval (long-page BM25 dilution fix) | ✅ implemented + tested: `chunks_fts` turn-window index fused into RRF, best-chunk evidence packed into context, auto index-schema migration |
 | §12 Phase 2 | FastAPI REST layer | ❌ not built (Phase 2 as planned) |
 | §12 Phase 3 | Multi-tenant/remote, LanceDB tier | ❌ not built (explicitly gated on demand) |
 
@@ -141,16 +142,43 @@ whole write/read pipeline are real and tested (133 tests).
 
 ## 6. Verified evidence (all reproducible)
 
-- **133 pytest tests green** (`pytest -q`) — includes the derived-index
+- **148 pytest tests green** (`pytest -q`) — includes the derived-index
   invariant, crash recovery, PII/injection quarantine, erasure, supersession,
-  temporal queries, interop roundtrips, CLI, and the benchmark adapters.
-- **Latency @1K pages** (`python benchmarks/bench.py 1000`, Windows/NTFS):
-  add() 6.3ms p50 / 9.1ms p95 · search 8.0ms p50 · packed context 11.1ms p50.
-- **Real LoCoMo run** (2 conversations, 30 graded questions, Nemotron QA,
-  offline heuristic extractor): answer-in-context 0.267 · answer-in-pages
-  0.333 · F1 0.113. Honest floor numbers — the report's expected gap-closers
-  (LLM extraction, hybrid L2, reranking) are exactly the not-yet-active parts.
-  In-house supersession eval: hit@5 1.0 · current-fact 1.0 · stale-leak 0.0.
+  temporal queries, interop roundtrips, CLI, the benchmark adapters, and the
+  chunk-retrieval/migration suite (tests/test_chunks.py).
+- **Latency @1K pages** (`python benchmarks/bench.py 1000`, Windows/NTFS),
+  after the full retrieval upgrade: add() 2.8ms p50 / 7.0ms p95 · search
+  5.9ms p50 / 11.1ms p95 · packed context 6.7ms p50 / 13.5ms p95 — ALL better
+  than the pre-upgrade baseline (8.2 / 7.8 / 10.7 p50). Retrieval quality was
+  bought with a speedup: stopword-trimmed queries + a slim rank-then-snippet
+  page query (the sorter no longer materializes snippet() per matching row)
+  more than offset the two extra FTS passes.
+- **Real LoCoMo, FULL dataset** (all 10 conversations, 1,540 questions,
+  offline heuristic extractor, k=5, strict accounting — evidence dropped by
+  the injection quarantine counts as a miss):
+  **R@5 (evidence recall) 0.919** — single-hop 0.967 · temporal 0.903 ·
+  multi-hop 0.883 · open-domain 0.652; all-evidence-in-top-5 0.799.
+  Answer-presence proxies: in-context 0.190 / in-pages 0.393 against a
+  measured **presence ceiling of 0.431** (fraction of gold answers that appear
+  verbatim anywhere in the conversation — LoCoMo golds are frequently derived
+  dates/aggregations, so presence proxies structurally cannot approach 1.0;
+  the runner now prints this ceiling next to the proxy).
+  In-house supersession eval: hit@5 1.0 · current-fact 1.0 · stale-leak 0.0;
+  HaluMem 0.0 stale-leak / 0.0 contamination / 1.0 safety; BEAM 1.0 — all
+  unchanged by the retrieval upgrade.
+- **LLM-extraction mode** (STRATA_LLM_PROVIDER=azure_openai): compiled pages
+  are ~800-char summaries of ~4,000-char sessions, so verbatim wording only
+  survives in raw/ — the raw-chunk fusion signal (chunked raw_fts rows voting
+  for their citing pages, aggregators excluded) took online-mode R@5 from
+  0.31 to 0.64–0.84 (run-dependent: LLM routing is nondeterministic).
+  Closing the remaining gap to 0.9 in this mode needs the semantic [vector]
+  L2 tier — the summaries' vocabulary diverges from question wording, which
+  lexical matching cannot bridge.
+- **RRF ablation notes** (referenced from `read/search.py`): chunk-list ranked
+  twice lifted multi-hop R@5 0.797→0.824 at no aggregate cost; 280-char chunks
+  beat 400-char (0.915→0.928 at 3 conversations); raw-vote restricted to pages
+  with ≤3 sources prevents aggregator pages squatting the top-k (LLM mode
+  0.489→0.636 at 2 conversations).
 - **Live chatbot validation**: with real memory of "vegetarian, window→aisle
   supersession", Nemotron booked the aisle seat, flagged the steak order
   against the vegetarian claim, and cited memory ids — temporal correctness +

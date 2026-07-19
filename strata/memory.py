@@ -62,6 +62,9 @@ class Memory:
         self.schema: Schema = load_schema(self.repo.schema_path)
         self.ledgers = Ledgers(self.repo.strata_dir)
         self.indexer = Indexer(self.repo.strata_dir)
+        if not self.indexer.schema_current():          # one-time migration of the
+            log.info("index schema outdated — rebuilding derived index")
+            self.indexer.reindex(self.repo)            # derived cache (invariant §6.1)
         self.vector_index = self._make_vector_index()
         self.searcher = Searcher(self.repo, self.indexer, self.schema, self.config,
                                  self.vector_index)

@@ -201,8 +201,28 @@ claim · serve` (MCP).
 | Multi-user isolation | **100%** | **100%** | — |
 
 L1 = BM25 only (default). L2 = BM25 + vector (install `[vector]` extra).
+L1 now fuses four rank lists via RRF: page metadata, claims, turn-window
+chunks (`chunks_fts`, 2x — the fix for whole-page BM25 dilution), and chunked
+raw sources voting for their citing pages (2x — keeps verbatim wording
+searchable when an LLM extractor summarizes).
 
-Reproduce: `python benchmarks/bench.py 1000`
+**Retrieval quality — real LoCoMo, all 10 conversations, 1,540 questions,
+offline heuristic extractor, k=5:**
+
+| metric | Strata | reference |
+|---|---|---|
+| **R@5 (evidence recall)** | **0.919** | Letta 0.685 · Khoj 0.832 · Hippo 0.944 |
+| — single-hop / temporal | 0.967 / 0.903 | |
+| — multi-hop / open-domain | 0.883 / 0.652 | |
+| R@5 (ALL evidence in top-5) | 0.799 | |
+| answer-in-context (proxy) | 0.190 | ceiling 0.431* |
+
+*Most LoCoMo golds are derived (dates, aggregations) and never appear verbatim
+in the conversation — the presence proxy cannot exceed its measured ceiling
+regardless of retriever. R@5 evidence recall is the standard retrieval metric.
+
+Reproduce: `python benchmarks/bench.py 1000` and
+`python run_benchmarks.py --download-locomo --limit 10`
 
 ## Known limitations (by design, documented per §13 of the research report)
 

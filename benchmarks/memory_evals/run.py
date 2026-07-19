@@ -50,10 +50,11 @@ def _fmt(v) -> str:
 def print_benchmark(result: BenchmarkResult) -> None:
     console.rule(f"[bold]{result.name}[/bold] — {result.mode}")
     summary = result.summary()
-    native = bool(result.metrics)          # in-house: show its own metrics only
+    native = "hit_at_k" in result.metrics  # in-house: show its own metrics only
     keys = (("cases", "skipped", "hit_at_k", "current_fact_rate", "stale_leak_rate")
             if native else
-            ("cases", "skipped", "answer_in_context", "answer_in_pages",
+            ("cases", "skipped", "r_at_k", "r_at_k_all", "answer_in_context",
+             "answer_in_pages", "answer_presence_ceiling",
              "em", "f1", "context_tokens_p50", "latency_ms_p50"))
     table = Table(title=f"{result.name}: overall", show_header=True)
     table.add_column("metric"); table.add_column("value", justify="right")
@@ -69,12 +70,18 @@ def print_benchmark(result: BenchmarkResult) -> None:
         cat_table = Table(title=f"{result.name}: by category")
         cat_table.add_column("category")
         cat_table.add_column("n", justify="right")
+        has_r = any("r_at_k" in v for v in by_cat.values())
+        if has_r:
+            cat_table.add_column("R@k", justify="right")
         cat_table.add_column("current fact" if native else "answer in context", justify="right")
         cat_table.add_column("page hit" if native else "answer in pages", justify="right")
         if any("f1" in v for v in by_cat.values()):
             cat_table.add_column("f1", justify="right")
         for cat, vals in by_cat.items():
-            row = [cat, str(vals["n"]), _fmt(vals["in_context"]), _fmt(vals["in_pages"])]
+            row = [cat, str(vals["n"])]
+            if has_r:
+                row.append(_fmt(vals.get("r_at_k", "")))
+            row += [_fmt(vals["in_context"]), _fmt(vals["in_pages"])]
             if any("f1" in v for v in by_cat.values()):
                 row.append(_fmt(vals.get("f1", "")))
             cat_table.add_row(*row)
@@ -89,14 +96,18 @@ def print_combined(results: list[BenchmarkResult]) -> None:
         table.add_column(col, justify="right" if "p50" in col or col == "cases" else "left")
     for r in results:
         s = r.summary()
-        if r.metrics:                                   # in-house native metrics
+        if "hit_at_k" in r.metrics:                     # in-house native metrics
             primary = f"current-fact {_fmt(r.metrics['current_fact_rate'])}"
             secondary = (f"hit@k {_fmt(r.metrics['hit_at_k'])} · "
                          f"stale-leak {_fmt(r.metrics['stale_leak_rate'])}")
             tokens = latency = "—"
         else:
-            primary = f"answer-in-context {_fmt(s['answer_in_context'])}"
-            secondary = f"answer-in-pages {_fmt(s['answer_in_pages'])}"
+            if "r_at_k" in s:
+                primary = f"R@k (evidence) {_fmt(s['r_at_k'])}"
+                secondary = f"answer-in-context {_fmt(s['answer_in_context'])}"
+            else:
+                primary = f"answer-in-context {_fmt(s['answer_in_context'])}"
+                secondary = f"answer-in-pages {_fmt(s['answer_in_pages'])}"
             if "f1" in s:
                 secondary += f" · EM {_fmt(s['em'])} · F1 {_fmt(s['f1'])}"
             tokens = _fmt(s["context_tokens_p50"])

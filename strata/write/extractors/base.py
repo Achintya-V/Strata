@@ -28,22 +28,47 @@ class Extractor(Protocol):
 
 def get_extractor(config: Config, ledgers: Optional[Ledgers] = None,
                   force_heuristic: bool = False) -> Extractor:
-    """LLM extraction when a key + SDK are available, heuristic floor otherwise."""
+    """Select the best available extractor.
+
+    Priority:
+      1. force_heuristic=True → HeuristicExtractor (always offline)
+      2. provider=litellm     → LiteLLMExtractor (any model via litellm)
+      3. provider=anthropic   → AnthropicExtractor (native tool-use)
+      4. fallback             → HeuristicExtractor
+    """
     from .heuristic import HeuristicExtractor
 
-    if not force_heuristic:
-        if config.llm.provider == "anthropic" and os.environ.get("ANTHROPIC_API_KEY"):
-            try:
-                from .anthropic_llm import AnthropicExtractor
-                return AnthropicExtractor(config, ledgers)
-            except ImportError:
-                log.warning("ANTHROPIC_API_KEY set but `anthropic` package missing "
-                            "(pip install strata-memory[llm]) — using heuristic extractor")
-        elif config.llm.provider == "azure_openai" and os.environ.get("AZURE_OPENAI_API_KEY"):
-            try:
-                from .azure_openai_llm import AzureOpenAIExtractor
-                return AzureOpenAIExtractor(config, ledgers)
-            except ImportError:
-                log.warning("AZURE_OPENAI_API_KEY set but `openai` package missing "
-                            "— using heuristic extractor")
+    if force_heuristic:
+        return HeuristicExtractor()
+
+    provider = config.llm.provider.lower()
+
+    # LiteLLM — universal provider (OpenAI, Ollama, Groq, Gemini, NVIDIA, etc.)
+    if provider == "litellm":
+        try:
+            from .litellm_extractor import LiteLLMExtractor
+            return LiteLLMExtractor(config, ledgers)
+        except ImportError:
+            log.warning("provider=litellm but `litellm` not installed "
+                        "(pip install strata-memory[litellm]) — falling back to heuristic")
+
+    # Native Anthropic (tool-use, best structured output quality)
+    elif provider == "anthropic" and os.environ.get("ANTHROPIC_API_KEY"):
+        try:
+            from .anthropic_llm import AnthropicExtractor
+            return AnthropicExtractor(config, ledgers)
+        except ImportError:
+            log.warning("ANTHROPIC_API_KEY set but `anthropic` package missing "
+                        "(pip install strata-memory[llm]) — using heuristic extractor")
+
+    # Auto-detect litellm if API keys are set for non-anthropic providers
+    elif provider not in ("anthropic", "heuristic"):
+        # openai, groq, gemini, ollama, nvidia_nim, together_ai, azure, bedrock, cohere...
+        try:
+            from .litellm_extractor import LiteLLMExtractor
+            return LiteLLMExtractor(config, ledgers)
+        except ImportError:
+            log.warning("provider=%s detected but `litellm` not installed "
+                        "(pip install strata-memory[litellm]) — using heuristic", provider)
+
     return HeuristicExtractor()

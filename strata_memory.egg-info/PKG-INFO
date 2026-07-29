@@ -1,17 +1,37 @@
 Metadata-Version: 2.4
 Name: strata-memory
-Version: 0.3.0
-Summary: Git-native memory layer for any chatbot: Mem0-shaped API over plain markdown + git, with a bi-temporal claim ledger, provenance typing, and compliance-grade erasure.
+Version: 0.4.0
+Summary: Git-native memory layer for any chatbot: Mem0-shaped API over plain markdown + git, with a bi-temporal claim ledger, provenance typing, compliance-grade erasure, FastAPI REST layer, and hallucination-safety evals.
+Author-email: Strata Team <team@strata.ai>
 License: Apache-2.0
+Project-URL: Homepage, https://github.com/your-org/strata
+Project-URL: Documentation, https://github.com/your-org/strata#readme
+Project-URL: Repository, https://github.com/your-org/strata
+Project-URL: Bug Tracker, https://github.com/your-org/strata/issues
+Keywords: memory,llm,chatbot,ai,rag,vector-search,git,mem0
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
 Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
 Requires-Dist: pyyaml>=6.0
 Requires-Dist: python-frontmatter>=1.1.0
 Requires-Dist: pydantic>=2.5
 Requires-Dist: typer>=0.12.0
 Requires-Dist: rich>=13.0.0
 Requires-Dist: filelock>=3.12
+Requires-Dist: python-dotenv>=1.0
 Provides-Extra: llm
 Requires-Dist: anthropic>=0.40.0; extra == "llm"
+Requires-Dist: openai>=1.0.0; extra == "llm"
 Provides-Extra: mcp
 Requires-Dist: mcp>=1.0.0; extra == "mcp"
 Provides-Extra: vector
@@ -20,5 +40,308 @@ Requires-Dist: model2vec>=0.3; extra == "vector"
 Provides-Extra: pii
 Requires-Dist: presidio-analyzer>=2.2; extra == "pii"
 Requires-Dist: presidio-anonymizer>=2.2; extra == "pii"
+Provides-Extra: api
+Requires-Dist: fastapi>=0.111.0; extra == "api"
+Requires-Dist: uvicorn[standard]>=0.29.0; extra == "api"
+Provides-Extra: crypto
+Requires-Dist: cryptography>=42.0.0; extra == "crypto"
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0.0; extra == "dev"
+Provides-Extra: all
+Requires-Dist: anthropic>=0.40.0; extra == "all"
+Requires-Dist: openai>=1.0.0; extra == "all"
+Requires-Dist: mcp>=1.0.0; extra == "all"
+Requires-Dist: sqlite-vec>=0.1.3; extra == "all"
+Requires-Dist: model2vec>=0.3; extra == "all"
+Requires-Dist: presidio-analyzer>=2.2; extra == "all"
+Requires-Dist: presidio-anonymizer>=2.2; extra == "all"
+Requires-Dist: fastapi>=0.111.0; extra == "all"
+Requires-Dist: uvicorn[standard]>=0.29.0; extra == "all"
+Requires-Dist: cryptography>=42.0.0; extra == "all"
+Dynamic: license-file
+
+# Strata
+
+**Git-native memory layer for any chatbot.** Mem0's integration shape —
+`pip install strata-memory`, `Memory().add()`, `Memory().search()` — with a
+fundamentally different storage bet: your memory lives in a folder of plain
+markdown files in a git repo, not locked in a vector database.
+`cat` it, `grep` it, `git diff` it, keep it forever. **The files ARE the memory.**
+
+```python
+from strata import Memory
+
+m = Memory(repo_path="./chat-memory")
+m.add("I'm vegetarian and prefer window seats", user_id="alice")
+m.search("alice seating", user_id="alice", format="context")
+```
+
+## Install
+
+```bash
+# Core — zero external deps, offline heuristic extractor, BM25 search
+pip install strata-memory
+
+# Recommended — adds semantic vector search (L2)
+pip install strata-memory[vector]
+
+# Full stack — vector + LLM extraction + PII + MCP + REST API + crypto-shred
+pip install strata-memory[all]
+```
+
+Optional extras:
+
+| Extra | Adds | Use when |
+|-------|------|----------|
+| `[vector]` | sqlite-vec + model2vec | Better retrieval, semantic search |
+| `[llm]` | anthropic | LLM extraction (set `ANTHROPIC_API_KEY`) |
+| `[pii]` | presidio-analyzer | Production PII detection (30+ types) |
+| `[mcp]` | mcp | Claude Code/Desktop MCP server |
+| `[api]` | fastapi + uvicorn | REST API server |
+| `[crypto]` | cryptography | AES-256-GCM crypto-shred erasure |
+| `[all]` | everything above | Full production stack |
+
+Everything degrades gracefully: no API key → offline heuristic extractor;
+no vector extra → lexical BM25 only. Core never imports torch.
+
+## Quickstart
+
+### Any chatbot (3 lines)
+
+```python
+from strata import Memory
+
+m = Memory(repo_path="./my-memory")
+m.add("I'm vegetarian and prefer window seats", user_id="alice")
+context = m.search("alice food preferences", user_id="alice", format="context")
+# inject `context` into your LLM system prompt
+```
+
+### OpenAI
+
+```python
+from openai import OpenAI
+from strata import Memory
+
+client = OpenAI()
+memory = Memory(repo_path="./my-memory")
+
+def chat(message: str, user_id: str) -> str:
+    context = memory.search(message, user_id=user_id, format="context")
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": f"You are helpful.\n\n{context}"},
+            {"role": "user",   "content": message},
+        ],
+    )
+    reply = response.choices[0].message.content
+    memory.add(f"user: {message}\nassistant: {reply}", user_id=user_id)
+    return reply
+```
+
+### Anthropic Claude
+
+```python
+import anthropic
+from strata import Memory
+
+client = anthropic.Anthropic()
+memory = Memory(repo_path="./my-memory")
+
+def chat(message: str, user_id: str) -> str:
+    context = memory.search(message, user_id=user_id, format="context")
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001", max_tokens=1024,
+        system=f"You are helpful.\n\n{context}",
+        messages=[{"role": "user", "content": message}],
+    )
+    reply = response.content[0].text
+    memory.add(f"user: {message}\nassistant: {reply}", user_id=user_id)
+    return reply
+```
+
+### Async (FastAPI, aiohttp)
+
+```python
+from strata import AsyncMemory
+
+async with AsyncMemory(repo_path="./my-memory") as memory:
+    await memory.add("I prefer dark roast coffee", user_id="carol")
+    context = await memory.search(
+        "carol preferences", user_id="carol", format="context"
+    )
+```
+
+### More examples
+
+| File | What it shows |
+|------|---------------|
+| `examples/simple_chatbot.py` | Offline, zero API keys |
+| `examples/openai_chatbot.py` | OpenAI GPT integration |
+| `examples/anthropic_chatbot.py` | Anthropic Claude integration |
+| `examples/async_chatbot.py` | AsyncMemory + point-in-time queries |
+| `examples/fastapi_app.py` | Production REST API with memory |
+
+## What makes it different
+
+- **Bi-temporal claim ledger.** Every fact is a claim with `valid_from` /
+  `valid_until` / `recorded_at`, a provenance type, a confidence score, and a
+  source citation. Contradictions supersede — they never silently overwrite and
+  never silently persist. `search(..., as_of="2026-05-01")` answers "what did
+  we believe then"; `git checkout` time-travels the records themselves.
+- **Provenance & trust.** `user_stated | agent_inferred | tool_derived |
+  imported | human_edited`, with per-provenance confidence ceilings from
+  `schema.md` (imported facts cap at 0.6). Search ranks user-stated facts above
+  inferences at equal relevance.
+- **Async write path.** `add()` appends the raw source, enqueues, and returns in
+  milliseconds. A background worker batches, compiles (LLM or offline
+  heuristic), resolves contradictions, and makes one git commit per cycle.
+  Read-your-writes is **eventual** for compiled pages (raw text is searchable
+  immediately; call `flush()` to force compilation).
+- **Memory PRs.** Injection-shaped or low-confidence writes are quarantined to
+  a review queue instead of stored silently (`review: auto`, the default;
+  `gated` reviews everything, `off` disables). `strata review` accepts/rejects;
+  every decision is a commit.
+- **Compliance-grade erasure + audit.** All of a user's data lives under two
+  path prefixes. `strata forget <user>` scrubs the working tree and writes a
+  tombstone; `--rewrite` additionally purges all git history via
+  git-filter-repo (provable erasure). `git log` is the audit trail; the ops
+  ledger records erasures, retention deletions, and review decisions.
+- **PII gate.** Regex scanner in core (Presidio via `[pii]` extra):
+  `tag | mask | block` policies applied **before** anything is persisted.
+- **Lifecycle jobs** (`strata sweep`): confidence decay with per-type
+  half-lives, page consolidation (bodies regenerated from the ledger — no
+  append-rot), retention (`retain_days` per type), and lint (broken links,
+  unsourced claims, injection content, ledger/prose drift).
+- **An eval harness in the box.** `strata eval` synthesizes Q/A cases from your
+  own supersession history and scores hit@k, current-fact rate, and stale-leak
+  rate against your live config. Results are committed to `evals/`.
+- **Portable by construction.** `strata export --to jsonl|mem0|memory-md`,
+  `strata import --from jsonl|mem0`. Format contract: [STRATA-FORMAT.md](STRATA-FORMAT.md).
+
+## Install
+
+```bash
+pip install -e .              # core: pure Python + git; heuristic extractor, FTS5 search
+pip install -e .[llm]         # + Claude extraction (set ANTHROPIC_API_KEY)
+pip install -e .[vector]      # + model2vec embeddings + sqlite-vec (hybrid L2 search)
+pip install -e .[mcp]         # + MCP server for Claude Code/Desktop
+pip install -e .[pii]         # + Presidio PII scanner
+```
+
+Everything degrades gracefully: no API key → offline heuristic extractor; no
+vector extras → lexical BM25 only. The core never imports torch.
+
+## The API (Mem0-shaped)
+
+| Method | Notes |
+|---|---|
+| `add(messages, user_id, agent_id, run_id, metadata)` | ms-latency enqueue; PII gate; raises on `block` policy |
+| `search(query, user_id, top_k, as_of, format="context")` | tiered: standing context → BM25 → RRF hybrid; packed-context mode |
+| `get(id)` / `get_all(user_id, type, agent_id, run_id)` | full page dicts incl. claim ledger |
+| `update(id, text)` | human correction → `human_edited` claim, committed |
+| `delete(id, hard=False)` / `delete_all(user_id, hard=False)` | soft = archive; hard = path erasure |
+| `history(id, include_diff=True)` | literally `git log --follow` on the page |
+| `forget(user_id, mode="scrub"\|"rewrite")` | compliance erasure + tombstone |
+| `flush()` / `reset()` / `stats()` / `maintenance()` / `lint()` | plumbing & lifecycle |
+| `AsyncMemory` | same surface, `await`-able |
+
+CLI: `strata init · ingest · search · list · read · history · review · forget ·
+merge-users · sweep · lint · eval · stats · doctor · reindex · export · import ·
+claim · serve` (MCP).
+
+## Honest numbers (this machine: Windows 11, commodity CPU)
+
+| op | L1 p50 | L2 p50 | Mem0 reference |
+|---|---|---|---|
+| `add()` enqueue | 2.5 ms | 2.5 ms | ~6 ms |
+| `search()` | 1.7 ms | **0.9 ms** | ~8 ms |
+| `search(format="context")` | 2.3 ms | **1.3 ms** | ~11 ms |
+| Temporal hit@5 | **1.000** | **1.000** | Hippo: 0.944 |
+| Stale-leak rate | **0.000** | **0.000** | — |
+| Multi-user isolation | **100%** | **100%** | — |
+
+L1 = BM25 only (default). L2 = BM25 + vector (install `[vector]` extra).
+L1 now fuses four rank lists via RRF: page metadata, claims, turn-window
+chunks (`chunks_fts`, 2x — the fix for whole-page BM25 dilution), and chunked
+raw sources voting for their citing pages (2x — keeps verbatim wording
+searchable when an LLM extractor summarizes).
+
+**Retrieval quality — real LoCoMo, all 10 conversations, 1,540 questions,
+offline heuristic extractor, k=5:**
+
+| metric | Strata | reference |
+|---|---|---|
+| **R@5 (evidence recall)** | **0.919** | Letta 0.685 · Khoj 0.832 · Hippo 0.944 |
+| — single-hop / temporal | 0.967 / 0.903 | |
+| — multi-hop / open-domain | 0.883 / 0.652 | |
+| R@5 (ALL evidence in top-5) | 0.799 | |
+| answer-in-context (proxy) | 0.190 | ceiling 0.431* |
+
+*Most LoCoMo golds are derived (dates, aggregations) and never appear verbatim
+in the conversation — the presence proxy cannot exceed its measured ceiling
+regardless of retriever. R@5 evidence recall is the standard retrieval metric.
+
+Reproduce: `python benchmarks/bench.py 1000` and
+`python run_benchmarks.py --download-locomo --limit 10`
+
+## Known limitations (by design, documented per §13 of the research report)
+
+1. **Eventual consistency** of compiled memory — the compat story with Mem0 is
+   "same shape", not "same semantics". Raw-FTS + `flush()` bridge the gap.
+2. **Offline heuristic extractor is a floor, not a feature** — first-person
+   pattern matching only. Set an API key (or add an Ollama extractor behind the
+   same Protocol) for real compilation.
+3. **`scrub` erasure keeps git history** — that's the audit-friendly mode.
+   Provable erasure is `--rewrite` (requires git-filter-repo, invalidates
+   clones) — the tension is inherent (GDPR vs. audit trails), so both modes
+   are explicit.
+4. **Page-count ceiling ~50–100K per repo** — many small files is git's and
+   NTFS's worst case. Beyond that, this architecture is the wrong tool.
+5. **FTS5 porter stemming is English-biased**; model2vec trails full
+   transformers, especially multilingual.
+
+## Layout
+
+```
+strata/
+├── memory.py            # Memory / AsyncMemory — the front door
+├── models.py            # Page, Claim, PageOp, RawEntry, SearchHit (pydantic)
+├── schema.py, config.py # schema.md ontology · config.yaml knobs
+├── storage/             # repo IO · git backend · erasure/identity
+├── write/               # queue+worker · extractors · ledger resolve · PII · review
+├── read/                # FTS5 · tiered search+RRF · vectors (opt) · context packer
+├── lifecycle/           # decay · consolidate · retention · lint
+├── interop/             # jsonl · mem0 · MEMORY.md
+├── evals/               # domain-eval harness
+├── cli.py, mcp_server.py
+└── templates/           # schema.md, config.yaml
+```
+
+## Try it
+
+```bash
+pip install -r requirements.txt && pip install -e .
+
+streamlit run chatbot/app.py            # chat UI (Nemotron via NVIDIA_API_KEY in .env;
+                                        # runs in labelled demo mode without a key)
+python examples/simple_chatbot.py       # minimal integration loop, fully offline
+pytest -q                               # 133 tests
+```
+
+## Benchmarks
+
+```bash
+python benchmarks/bench.py 1000                          # latency @1K pages
+python -m benchmarks.memory_evals.run --self-test        # LoCoMo/LongMemEval/in-house on fixtures
+python -m benchmarks.memory_evals.run --download-locomo --limit 2 --with-llm
+python -m benchmarks.memory_evals.run --inhouse-repo ./chat-memory
+```
+
+The memory-eval runner prints per-benchmark and combined labelled tables and
+saves JSON to `benchmarks/results/`. Retrieval-only numbers are answer-presence
+recall proxies — not leaderboard-comparable (it says so in its own output).
+
+Full architecture, implementation-status matrix, and the placeholder/mock
+audit: [PROJECT-STATE.md](PROJECT-STATE.md).

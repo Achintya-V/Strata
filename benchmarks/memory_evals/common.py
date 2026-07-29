@@ -221,11 +221,11 @@ def fresh_memory(root, name: str, force_heuristic: bool = True):
     """A Memory on a fresh repo under `root`, tuned for benchmark ingest: no
     background worker, and the deterministic heuristic extractor by default so
     runs are reproducible (pass force_heuristic=False + ANTHROPIC_API_KEY to
-    measure LLM-compiled memory instead)."""
-    
-    if os.environ.get("STRATA_LLM_PROVIDER"):
-        force_heuristic = False
+    measure LLM-compiled memory instead).
 
+    IMPORTANT: force_heuristic=True is ALWAYS respected — even when
+    STRATA_LLM_PROVIDER is set in the environment. The caller decides.
+    Use --llm-extract on the benchmark runner to opt in to LLM extraction."""
     from strata import Memory
     return Memory(repo_path=root / name, start_worker=False,
                   force_heuristic=force_heuristic)

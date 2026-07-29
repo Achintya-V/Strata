@@ -70,5 +70,5 @@ class PresidioScanner(PIIScanner):
                 value=text[r.start:r.end]
             )
             for r in results
-            if r.score >= 0.5  # Filter low-confidence matches
+            if r.score >= 0.35  # Lowered from 0.5 for better recall on short inputs
         ]

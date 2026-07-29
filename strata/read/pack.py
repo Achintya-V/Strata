@@ -38,11 +38,10 @@ def _hit_block(hit: SearchHit) -> str:
         lines.append(hit.summary.strip())
     if hit.claims:
         for c in sorted(hit.claims, key=lambda c: -c.confidence):
-            marker = "" if c.is_active else f" [superseded {c.valid_until}]"
-            lines.append(f"- ({c.provenance.value}, {c.confidence:.2f}) {c.text}{marker}")
-    elif hit.snippet:
-        # the best-matching chunk (or FTS snippet) quoted line-by-line — this is
-        # the evidence the answer usually lives in; _fit trims at line boundaries
+            if c.is_active:  # A2: never pack superseded claims — they are hallucination surface
+                lines.append(f"- ({c.provenance.value}, {c.confidence:.2f}) {c.text}")
+    # A3: always include snippet evidence alongside claims (not just as fallback)
+    if hit.snippet:
         lines.extend(f"> {ln}" for ln in hit.snippet.splitlines() if ln.strip())
     return "\n".join(lines)
 

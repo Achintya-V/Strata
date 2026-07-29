@@ -314,9 +314,10 @@ def bench_token_efficiency(work_dir: Path) -> dict:
         m.add(f, user_id="alice")
     m.flush()
 
-    # Measure raw page size vs packed context
+    # Measure: raw input tokens (what you'd paste without Strata) vs packed output
     all_pages = m.get_all(user_id="alice")
-    raw_tokens = sum(est_tokens(p.get("body", "") + p.get("memory", "")) for p in all_pages)
+    # The honest denominator: total tokens of the RAW input facts (what you told Strata)
+    raw_tokens = sum(est_tokens(f) for f in facts)
     packed = m.search("alice preferences work", user_id="alice", format="context") or ""
     packed_tokens = est_tokens(packed)
 

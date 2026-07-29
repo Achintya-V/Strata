@@ -716,7 +716,9 @@ def main():
     llm = None
     if args.with_llm:
         from chatbot.llm import NemotronClient
-        llm = NemotronClient()
+        # judge model can be overridden separately from the chat/extraction
+        # model via NEMOTRON_JUDGE_MODEL; unset -> NemotronClient's own default
+        llm = NemotronClient(model=os.environ.get("NEMOTRON_JUDGE_MODEL") or None)
         if not llm.available:
             console.print("[red]Neither NVIDIA_API_KEY nor AZURE_OPENAI_API_KEY is set — running without LLM grading[/red]")
             llm = None

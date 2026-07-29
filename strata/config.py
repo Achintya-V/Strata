@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -18,7 +18,6 @@ class LLMConfig(BaseModel):
     provider: str = os.environ.get("STRATA_LLM_PROVIDER", "anthropic")
     compile_model: str = "claude-haiku-4-5-20251001"    # cheap, high-volume extraction
     judgment_model: str = "claude-sonnet-5"             # contradiction/lint judgment calls
-    litellm_api_base: Optional[str] = None              # custom base URL (Ollama, proxies)
 
 
 class PipelineConfig(BaseModel):

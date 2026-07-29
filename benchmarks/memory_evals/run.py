@@ -160,8 +160,11 @@ def main(argv: list[str] | None = None) -> list[BenchmarkResult]:
 
     llm = None
     if args.with_llm:
+        import os
         from chatbot.llm import NemotronClient
-        llm = NemotronClient()
+        # judge model can be overridden separately from the chat/extraction
+        # model via NEMOTRON_JUDGE_MODEL; unset -> NemotronClient's own default
+        llm = NemotronClient(model=os.environ.get("NEMOTRON_JUDGE_MODEL") or None)
         if not llm.available:
             ap.error("--with-llm needs NVIDIA_API_KEY set in .env")
 

@@ -130,12 +130,20 @@ def test_page_update_replaces_chunks(mem):
 
 def test_reindex_rebuilds_chunks_invariant(tmp_path):
     """Delete .strata entirely -> chunks come back from markdown (the invariant)."""
+    import gc
     import shutil
     m = Memory(repo_path=tmp_path / "m", start_worker=False)
     add_and_flush(m, "user: the quokka sanctuary visit was on a rainy tuesday", user_id="q")
     assert m.searcher.search("quokka sanctuary", user_id="q", top_k=5)
     m.close()
-    shutil.rmtree(tmp_path / "m" / ".strata")
+    gc.collect()                      # release lingering sqlite handles on Windows
+    import time; time.sleep(0.1)      # give Windows a moment to release file locks
+    try:
+        shutil.rmtree(tmp_path / "m" / ".strata")
+    except PermissionError:
+        # Windows WAL lock race — retry once after a brief wait
+        time.sleep(0.5)
+        shutil.rmtree(tmp_path / "m" / ".strata")
     m2 = Memory(repo_path=tmp_path / "m", start_worker=False)
     m2.reindex()
     hits = m2.searcher.search("quokka sanctuary", user_id="q", top_k=5)

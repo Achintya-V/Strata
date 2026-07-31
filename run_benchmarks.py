@@ -434,6 +434,25 @@ def bench_erasure() -> dict:
     return result
 
 
+# ── Benchmark 11: StrataBench (own ground-truth suite, true R@k) ─────────────
+
+def bench_stratabench(work_dir: Path, k: int = 5, llm=None,
+                      llm_extract: bool = False) -> dict:
+    """Strata's own hand-authored benchmark — the only one here with labelled
+    gold evidence pages, so R@1/R@5/MRR/P@5 are true retrieval metrics."""
+    from benchmarks.memory_evals.stratabench import run_stratabench
+    console.print("  [cyan]stratabench:[/cyan] 18 hand-authored questions, "
+                  "10 capabilities, labelled evidence...")
+    r = run_stratabench(work_dir, k=k, llm=llm,
+                        force_heuristic=not llm_extract,
+                        progress=lambda m: console.print(m))
+    console.print(f"  R@1={r['r_at_1']:.3f}  R@5={r['r_at_5']:.3f}  "
+                  f"MRR={r['mrr']:.3f}  answer-in-ctx={r['answer_in_context']:.3f}  "
+                  f"stale-leak={r['stale_leak_rate']:.3f}"
+                  + (f"  F1={r['f1']:.3f}" if "f1" in r else ""))
+    return r
+
+
 # ── Benchmark 10: Feature Matrix ─────────────────────────────────────────────
 
 def bench_feature_matrix() -> dict:
@@ -562,7 +581,7 @@ def print_report(results: dict) -> None:
             t.add_row("R@5 (ALL evidence in top-5)", f"{loc['r_at_5_all_evidence']:.3f}", "-", "-")
         t.add_row("answer-in-context (proxy)", f"{loc['answer_in_context']:.3f}", "-", "-")
         if "answer_presence_ceiling" in loc:
-            t.add_row("  └ presence ceiling*", f"{loc['answer_presence_ceiling']:.3f}", "-", "-")
+            t.add_row("  + presence ceiling*", f"{loc['answer_presence_ceiling']:.3f}", "-", "-")
         t.add_row("answer-in-pages (proxy)", f"{loc['answer_in_pages']:.3f}",   "-",     "-")
         t.add_row("ctx tokens p50",    str(loc["context_tokens_p50"]),    "-",     "-")
         t.add_row("cases",             str(loc["cases"]),                 "-",     "-")
@@ -637,6 +656,45 @@ def print_report(results: dict) -> None:
         t.add_row("crypto-shred (AES-256-GCM)", "yes" if er["crypto_shred_works"] else "no")
         console.print(t)
 
+    # --- StrataBench (true R@k, own ground truth) ---
+    sb = results.get("stratabench", {})
+    if sb:
+        t = Table(title="11. StrataBench — TRUE R@k (labelled gold evidence)",
+                  show_header=True, header_style="bold cyan")
+        t.add_column("metric"); t.add_column("Strata", justify="right")
+        t.add_column("reference", justify="right")
+        def _f(v):
+            return "—" if v is None else f"{v:.3f}"
+
+        t.add_row("R@1",                _f(sb["r_at_1"]), "—")
+        t.add_row("R@5",                _f(sb["r_at_5"]), "Mem0 0.952 / Khoj 0.832")
+        t.add_row("R@5 (all evidence)", _f(sb["r_at_5_all_evidence"]), "—")
+        t.add_row("MRR",                _f(sb["mrr"]), "—")
+        t.add_row("Precision@5",        _f(sb["precision_at_5"]), "—")
+        t.add_row("answer-in-context",  _f(sb["answer_in_context"]), "1.000 ideal")
+        t.add_row("stale-leak (asserted current)", _f(sb["stale_leak_rate"]), "0.000 ideal")
+        t.add_row("  + present incl. history", _f(sb.get("stale_present_incl_history")),
+                  "(informational)")
+        if sb.get("abstention_rate") is not None:
+            t.add_row("abstention rate", _f(sb["abstention_rate"]), "1.000 ideal")
+        if sb.get("f1") is not None:
+            t.add_row("EM (LLM graded)", _f(sb["em"]), "—")
+            t.add_row("F1 (LLM graded)", _f(sb["f1"]), "—")
+        t.add_row("questions",          str(sb["questions"]), "—")
+        console.print(t)
+
+        ct = Table(title="11b. StrataBench per-capability", header_style="bold cyan")
+        for col in ("capability", "n", "R@5", "MRR", "answer-in-ctx", "F1"):
+            ct.add_column(col, justify="right" if col != "capability" else "left")
+        for cat, b in sorted(sb["by_category"].items()):
+            ct.add_row(cat, str(b["n"]), _f(b["r_at_5"]), _f(b["mrr"]),
+                       _f(b["answer_in_context"]), _f(b.get("f1")))
+        console.print(ct)
+
+        if sb.get("failures"):
+            console.print(f"[yellow]  {len(sb['failures'])} failing case(s): "
+                          + ", ".join(f["qid"] for f in sb["failures"]) + "[/yellow]")
+
     # --- Feature matrix ---
     fm = results.get("feature_matrix", {})
     if fm:
@@ -696,6 +754,11 @@ def main():
                     help="use NVIDIA LLM for graded QA (needs NVIDIA_API_KEY in .env)")
     ap.add_argument("--skip-latency",    action="store_true")
     ap.add_argument("--skip-locomo",     action="store_true")
+    ap.add_argument("--skip-stratabench", action="store_true",
+                    help="skip Strata's own ground-truth benchmark")
+    ap.add_argument("--llm-extract",     action="store_true",
+                    help="compile memory with the configured LLM extractor "
+                         "(default: deterministic heuristic)")
     ap.add_argument("--pages",           type=int, default=100,
                     help="pages for latency benchmark (default 100)")
     ap.add_argument("--out",             type=Path, help="output JSON path")
@@ -783,6 +846,12 @@ def main():
     # 10. Feature matrix
     console.rule("10. Feature Matrix")
     results["feature_matrix"] = bench_feature_matrix()
+
+    # 11. StrataBench — own ground-truth suite (true R@k)
+    if not args.skip_stratabench:
+        console.rule("11. StrataBench (own ground truth, TRUE R@k)")
+        results["stratabench"] = bench_stratabench(
+            work_dir, llm=llm, llm_extract=args.llm_extract)
 
     total_s = time.perf_counter() - t_start
     results["meta"] = {
